@@ -1,2 +1,6 @@
-server:
-  port: 8111
+modbus_server: # require service restart
+  accept: 0.0.0.0
+  port: 502
+capture: # may be changed without restart
+  folder: ./capture
+  frames: 50
