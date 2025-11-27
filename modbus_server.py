@@ -79,7 +79,6 @@ async def background_executor(q, store):
                 store.setValues(2, [1]) # Working status
                 print("Working status set")
                 usb_cams.capture_all_cams(config=(config.read_config()))
-                # await asyncio.sleep(10) # Simulate processing
                 print("Executor completed")
                 store.setValues(2, [0]) # Complete status
                 store.setValues(3, "OK".encode("ascii"))
