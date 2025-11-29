@@ -6,6 +6,8 @@ when a value is written to it.
 """
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+
 import config
 
 from pymodbus import ModbusDeviceIdentification, FramerType
@@ -27,17 +29,17 @@ VALID_OPS = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
+background_executor = ThreadPoolExecutor(max_workers=1)
 
 class CallbackDataBlock(ModbusSequentialDataBlock):
     """A datablock that stores the new value in memory,
-    and passes the operation to a message queue for further processing.
+    and passes the operatio to a background thread executor for further processing.
     """
 
-    def __init__(self, queue, addr, values):
+    def __init__(self, addr, values):
         """Initialize."""
-        self.queue = queue
         super().__init__(addr, values)
 
     def setValues(self, address, value):
@@ -55,11 +57,7 @@ class CallbackDataBlock(ModbusSequentialDataBlock):
         if address is not OP_ADDRESS or op_code not in VALID_OPS:
             logger.error(f"Illegal operation value. Expecting one of {VALID_OPS}, got: {op_code}")
             return ExcCodes.ILLEGAL_VALUE
-        asyncio.create_task(
-            self.queue.put({
-                'op_code': value
-            })
-        )
+        background_executor.submit(handle_background_task, op_code, self)
         return super().setValues(address, value)
 
 
@@ -69,32 +67,30 @@ class CallbackDataBlock(ModbusSequentialDataBlock):
         logger.debug(f"Callback from getValues with address {address}, count {count}, data {values}")
         return values
 
-async def background_executor(q, store):
-    while True:
+def handle_background_task(opcode: int, store):
+    print(f"Executor got opcode: {opcode}")
+    # if opcode == 0:
+        # do nothing
+    if opcode == 1:
         try:
-            data = await q.get()
-            print(f"Executor got: {data}")
-            opcode = data['op_code'][0]
-            if opcode == 1: # Read from camera
-                store.setValues(2, [1]) # Working status
-                print("Working status set")
-                usb_cams.capture_all_cams(config=(config.read_config()))
-                print("Executor completed")
-                store.setValues(2, [0]) # Complete status
-                store.setValues(3, "OK".encode("ascii"))
-                store.setValues(1, [0]) # Ready for the next operation
+            store.setValues(2, [1]) # Working status
+            logger.debug("Working status set")
+            usb_cams.capture_all_cams(config=(config.read_config()))
+            logger.debug("Executor completed")
+            store.setValues(2, [0]) # Complete status
+            result = "OK"
+            ints_list = list(result.encode("ascii"))
+            ints_list.append(0) # terminate the string
+            store.setValues(3, ints_list)
+            store.setValues(1, [0]) # Ready for the next operation
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-        finally:
-            q.task_done()
+            logger.error(f"An unexpected error occurred: {e}")
 
 async def run_callback_server():
     conf = config.read_config()
     """Define datastore callback for server and do setup."""
-    queue: asyncio.Queue = asyncio.Queue()
 
-    block = CallbackDataBlock(queue, 0x01, [0] * 1000)
-    background_task = asyncio.create_task(background_executor(queue, block))
+    block = CallbackDataBlock(0x01, [0] * 1000)
 
     store = ModbusDeviceContext(
         di=ModbusSequentialDataBlock(0x01, [0] * 100),
@@ -106,12 +102,12 @@ async def run_callback_server():
 
     # Device identity (optional)
     identity = ModbusDeviceIdentification()
-    identity.VendorName = 'ExampleCorp'
-    identity.ProductCode = 'EM'
-    identity.VendorUrl = 'http://example.com'
-    identity.ProductName = 'Modbus Random Data Server'
+    identity.VendorName = 'automato-ai'
+    identity.ProductCode = 'M-OCR'
+    identity.VendorUrl = 'https://github.com/automato-ai/maxima-ocr'
+    identity.ProductName = 'Maxima OCR'
     identity.ModelName = 'ModbusServer'
-    identity.MajorMinorRevision = '1.0'
+    identity.MajorMinorRevision = '0.2'
 
     await StartAsyncTcpServer(
         context=context,  # Data storage
@@ -125,11 +121,7 @@ async def run_callback_server():
     )
 
     # graceful shutdown when server stopped
-    background_task.cancel()
-    try:
-        await background_task
-    except asyncio.CancelledError:
-        print("Consumer task cancelled.")
+    background_executor.shutdown(False)
 
 
 if __name__ == "__main__":
