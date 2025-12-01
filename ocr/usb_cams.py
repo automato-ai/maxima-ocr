@@ -10,10 +10,10 @@ import cv2
 
 logger = logging.getLogger(__name__)
 
-def get_cams(config):
+def get_cams(config, format):
     available_cameras = []
     for i in range(10): # Check indices from 0 to 9
-        cap = cv2.VideoCapture(i)
+        cap = cv2.VideoCapture(i, format)
         if cap.isOpened():
             logger.debug(f"Camera found at index: {i}")
             available_cameras.append(i)
@@ -27,8 +27,39 @@ DEFAULT_CONFIG: Final[object] = {
     'capture': {
         'folder': './capture',
         'frames': 10
+    },
+    'camera': {
+        'format': "ANY"
     }
 }
+
+
+def get_cap_format(format):
+    match format:
+        case "ANY":
+            return cv2.CAP_ANY
+        case "DSHOW":
+            return cv2.CAP_DSHOW
+        case "QT":
+            return cv2.CAP_QT
+        case "MSMF":
+            return cv2.CAP_MSMF
+        case "OPENNI":
+            return cv2.CAP_OPENNI
+        case "FFMPEG":
+            return cv2.CAP_FFMPEG
+        case "OPENCV_MJPEG":
+            return cv2.CAP_OPENCV_MJPEG
+        case "V4L":
+            return cv2.CAP_V4L
+        case "V4L2":
+            return cv2.CAP_V4L2
+        case "INTEL_MFX":
+            return cv2.CAP_INTEL_MFX
+        case _:  # Default case
+            logger.warning(f"Unsupported format: '{format}'. Roll back to 'ANY'.")
+            return cv2.CAP_ANY
+
 
 def capture_all_cams(config=DEFAULT_CONFIG):
     if config is None:
@@ -36,8 +67,9 @@ def capture_all_cams(config=DEFAULT_CONFIG):
     capture_folder = config['capture']['folder']
     frames = config['capture']['frames']
     fps = 25
+    format = get_cap_format(config['camera']['format'])
 
-    available_cameras = get_cams(config)
+    available_cameras = get_cams(config, format)
     logger.info(f"Available camera indices: {available_cameras}")
 
     output_folder_path = Path(capture_folder)
@@ -46,7 +78,7 @@ def capture_all_cams(config=DEFAULT_CONFIG):
 
     caps = []
     for available_cap in available_cameras:
-        cap = cv2.VideoCapture(available_cap)
+        cap = cv2.VideoCapture(available_cap, format)
 
         filename = capture_filename(start_time, available_cap)
         codec = cv2.VideoWriter_fourcc(*'mp4v')
@@ -89,9 +121,3 @@ def capture_all_cams(config=DEFAULT_CONFIG):
 
 def capture_filename(start_time, cam_name):
     return f"{start_time.strftime('%Y%m%d-%H%M%S')}-{cam_name}.mp4"
-
-
-if __name__ == '__main__':
-    capture_all_cams()
-    sleep(5)
-    capture_all_cams()

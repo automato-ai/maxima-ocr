@@ -4,3 +4,8 @@ modbus_server: # require service restart
 capture: # may be changed without restart
   folder: ./capture
   frames: 50
+camera:
+  # valid values: "ANY", "DSHOW", "QT", "MSMF", "OPENNI", "FFMPEG", "OPENCV_MJPEG", "V4L", "V4L2", "INTEL_MFX"
+  format: DSHOW
+logging:
+  level: INFO
