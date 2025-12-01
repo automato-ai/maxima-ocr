@@ -28,8 +28,13 @@ VALID_OPS = [
     1  # Read ID from camera
 ]
 
+FORMAT = ('%(asctime)-15s %(threadName)-15s %(levelname)-8s %(module)-15s:'
+          '%(lineno)-8s %(message)s')
+start_config = config.read_config()
+log_level = start_config['logging']['level'] or "DEBUG"
+logging.basicConfig(format=FORMAT, level=logging.getLevelName(log_level))
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 background_executor = ThreadPoolExecutor(max_workers=1)
 
@@ -68,7 +73,7 @@ class CallbackDataBlock(ModbusSequentialDataBlock):
         return values
 
 def handle_background_task(opcode: int, store):
-    print(f"Executor got opcode: {opcode}")
+    logger.debug(f"Executor got opcode: {opcode}")
     # if opcode == 0:
         # do nothing
     if opcode == 1:
@@ -86,8 +91,7 @@ def handle_background_task(opcode: int, store):
         except Exception as e:
             logger.error(f"An unexpected error occurred: {e}")
 
-async def run_callback_server():
-    conf = config.read_config()
+async def run_callback_server(config):
     """Define datastore callback for server and do setup."""
 
     block = CallbackDataBlock(0x01, [0] * 1000)
@@ -112,7 +116,7 @@ async def run_callback_server():
     await StartAsyncTcpServer(
         context=context,  # Data storage
         identity=identity,  # server identify
-        address=(conf['modbus_server']['accept'], conf['modbus_server']['port']),  # listening address
+        address=(config['modbus_server']['accept'], config['modbus_server']['port']),  # listening address
         # custom_functions=[], # allow custom handling
         framer=FramerType.SOCKET,  # The framer strategy to use
         # ignore_missing_devices=True, # ignore request to a missing device
@@ -125,10 +129,5 @@ async def run_callback_server():
 
 
 if __name__ == "__main__":
-    FORMAT = ('%(asctime)-15s %(threadName)-15s %(levelname)-8s %(module)-15s:'
-              '%(lineno)-8s %(message)s')
-    logging.basicConfig(format=FORMAT)
-    logging.getLogger().setLevel(logging.INFO)
-
-    asyncio.run(run_callback_server())
+    asyncio.run(run_callback_server(config.read_config()))
 
