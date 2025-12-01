@@ -7,20 +7,17 @@ from typing import Final
 import logging
 
 import cv2
+from cv2_enumerate_cameras import enumerate_cameras
+
 
 logger = logging.getLogger(__name__)
 
 def get_cams(config, format):
     available_cameras = []
-    for i in range(10): # Check indices from 0 to 9
-        cap = cv2.VideoCapture(i, format)
-        if cap.isOpened():
-            logger.debug(f"Camera found at index: {i}")
-            available_cameras.append(i)
-            cap.release() # Release the camera after checking
-        else:
-            cap.release() # Release if not opened
-
+    for camera_info in enumerate_cameras(format):
+        logger.debug(f"Found camera #{camera_info.index}: {camera_info.name}\t pid={camera_info.pid}\t vid={camera_info.vid}\t path='{camera_info.path}'")
+        if camera_info.pid is not None:
+            available_cameras.append(camera_info.index)
     return available_cameras
 
 DEFAULT_CONFIG: Final[object] = {
@@ -70,7 +67,7 @@ def capture_all_cams(config=DEFAULT_CONFIG):
     format = get_cap_format(config['camera']['format'])
 
     available_cameras = get_cams(config, format)
-    logger.info(f"Available camera indices: {available_cameras}")
+    logger.info(f"Available camera for capturing: {available_cameras}")
 
     output_folder_path = Path(capture_folder)
     output_folder_path.mkdir(parents=True, exist_ok=True)

@@ -7,5 +7,33 @@ capture: # may be changed without restart
 camera:
   # valid values: "ANY", "DSHOW", "QT", "MSMF", "OPENNI", "FFMPEG", "OPENCV_MJPEG", "V4L", "V4L2", "INTEL_MFX"
   format: DSHOW
+
 logging:
-  level: INFO
+  version: 1
+  disable_existing_loggers: False
+
+  formatters:
+    simpleFormatter:
+      format: '%(asctime)-15s %(threadName)-15s %(levelname)-8s %(module)-15s:%(lineno)-8s %(message)s'
+      datefmt: '%Y-%m-%d %H:%M:%S'
+
+  handlers:
+    consoleHandler:
+      class: logging.StreamHandler
+      level: DEBUG
+      formatter: simpleFormatter
+      stream: ext://sys.stderr
+    fileHandler:
+      class: logging.handlers.RotatingFileHandler
+      level: DEBUG
+      formatter: simpleFormatter
+      filename: modbus_server.log
+      maxBytes: 1048576 # 1MB
+      backupCount: 5
+
+  loggers:
+    root:
+      level: DEBUG
+      handlers:
+      - fileHandler
+      - consoleHandler

@@ -11,3 +11,4 @@ pymodbus
 # opencv-python~=4.12.0.88
 # opencv-python
 opencv-contrib-python
+cv2-enumerate-cameras

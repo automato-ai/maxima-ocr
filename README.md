@@ -17,12 +17,17 @@ The default listening port is `502`, but can be changed in the `config.yaml` fil
 
 The protocol on top of modbus id as follows:
 
-1. Master triggers operation by writing value `1` to the holding register at address `1`
+1. Master triggers the operation by writing value `1` to the holding register at address `1`. The slave will handle
+   this register as a button. Meaning, it will only be triggered by the change of the value from `0` to `1`.
+   Any consecutive writing of value `1` will be ignored (assuming the button is still pressed). The status will
+   reset, once the Master will write `0` to the register again.
 2. The camera operation starts. This operation can take a few seconds. The execution status can be monitored on 
    holding register `2`. The monitoring is optional. See the [status codes](#status-codes-for-monitoring) below.
 3. Once the operation is complete, the value at register `1` will become `0`, indicating that no operation is 
    currently performed and the slave is ready for next operation.
-4. The result of the last executed operation can be read from the holding registers starting at address `3`.
+4. The result of the last executed operation can be read from the holding registers starting at address `3`. The
+   result string is encoded in `ascii` format, one char per register. The string is terminated by `0` (next register
+   after the result string is promised to hold the value `0`).
 
 #### Status codes for monitoring
 Optionally, the master can monitor the execution of the operation by reading the execution status from 
