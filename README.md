@@ -129,9 +129,23 @@ Every OCR trigger (opcode `2`) leaves a replay artifact in `capture.folder`
 The metadata JSON pairs 1:1 with the videos via the shared timestamp prefix.
 Each frame entry carries, per camera, the readiness decision (or `{"disabled":
 true}` when readiness gating is off), the bounding box, the OCR text +
-per-digit detections, and the aggregator's running result. The tick-level
+per-digit detections, and the aggregator's running result (including the
+individual digit candidates and a reference to the per-frame original and
+preprocessed crop PNGs stored under `{prefix}-crops/`). The tick-level
 `agg_status` and `fused` fields capture the cross-camera fusion verdict — the
 same data the pipeline uses to decide whether to terminate.
+
+Replay a session with `tools\replay.exe`:
+
+```
+C:\Maxima\OCR\tools\replay.exe C:\Maxima\OCR\capture\20260511-153012-meta.json
+```
+
+The tool shows each camera's video side-by-side with the bbox (cyan, with the
+bottom edge highlighted in red), a readiness chip, and below each video a
+zoomed view of the original crop with aggregator candidates marked and the
+preprocessed crop with OCR digit boxes. Pass a folder instead of a meta.json
+to replay the most recent session.
 
 Recording is enabled by default. To disable on disk-constrained sites:
 ```yaml

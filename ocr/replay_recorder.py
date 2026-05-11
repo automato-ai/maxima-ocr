@@ -46,6 +46,8 @@ class ReplayRecorder:
         self._fps = fps
         self._writers: Optional[List[Any]] = None
         self._frames_meta: List[Dict[str, Any]] = []
+        self._crops_subdir = f"{self._prefix}-crops"
+        self._crops_dir = self._folder / self._crops_subdir
 
     # --- Public API ---
 
@@ -102,18 +104,19 @@ class ReplayRecorder:
         aggregations = _pad_to(getattr(result, "aggregation", None), n)
         fused = getattr(result, "fused_result", None)
 
-        cams = [
-            {
-                "cam": self._cam_indices[i] if i < len(self._cam_indices) else i,
+        frame_idx = len(self._frames_meta)
+        cams = []
+        for i in range(n):
+            cam_idx = self._cam_indices[i] if i < len(self._cam_indices) else i
+            cams.append({
+                "cam": cam_idx,
                 "readiness": self._encode_readiness(readiness[i]),
                 "bbox": self._encode_bbox(bboxes[i]),
-                "ocr": self._encode_ocr(ocrs[i]),
+                "ocr": self._encode_ocr(ocrs[i], frame_idx, cam_idx),
                 "aggregation": self._encode_aggregation(aggregations[i]),
-            }
-            for i in range(n)
-        ]
+            })
         return {
-            "frame": len(self._frames_meta),
+            "frame": frame_idx,
             "cameras": cams,
             "agg_status": self._derive_agg_status(getattr(result, "aggregation", None)),
             "fused": self._encode_aggregation(fused),
@@ -138,10 +141,12 @@ class ReplayRecorder:
             "rotation": _as_float(getattr(bbox, "rotation", 0.0)),
         }
 
-    def _encode_ocr(self, ocr) -> Optional[Dict[str, Any]]:
+    def _encode_ocr(self, ocr, frame_idx: int, cam_idx: int) -> Optional[Dict[str, Any]]:
         if ocr is None:
             return None
         digits = getattr(ocr, "digit_detections", None) or []
+        crop_rel = self._persist_crop(getattr(ocr, "crop_image", None), frame_idx, cam_idx, "orig")
+        prep_rel = self._persist_crop(getattr(ocr, "preprocessed_crop_image", None), frame_idx, cam_idx, "prep")
         return {
             "text": getattr(ocr, "text", None),
             "confidence": _as_float(getattr(ocr, "confidence", 0.0)),
@@ -156,17 +161,48 @@ class ReplayRecorder:
                 }
                 for d in digits
             ],
+            "crop": crop_rel,
+            "preproc": prep_rel,
         }
+
+    def _persist_crop(self, image, frame_idx: int, cam_idx: int, kind: str) -> Optional[str]:
+        """Write the crop to disk as PNG and return its path relative to the
+        capture folder (forward-slash separated for portability), or None when
+        the OCR stage didn't produce a crop for this frame/camera."""
+        if image is None or getattr(image, "size", 0) == 0:
+            return None
+        if not self._crops_dir.exists():
+            self._crops_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{frame_idx:04d}-{cam_idx}-{kind}.png"
+        path = self._crops_dir / filename
+        cv2.imwrite(str(path), image)
+        return f"{self._crops_subdir}/{filename}"
 
     def _encode_aggregation(self, agg) -> Optional[Dict[str, Any]]:
         if agg is None:
             return None
+        candidates = getattr(agg, "candidates", None) or []
         return {
             "text": getattr(agg, "text", None),
             "confidence": _as_float(getattr(agg, "confidence", 0.0)),
             "status": getattr(agg, "status", None),
             "frames_processed": getattr(agg, "frames_processed", None),
             "reason": getattr(agg, "reason", None),
+            "expected_digits": int(getattr(agg, "expected_digits", 0) or 0),
+            "candidates": [self._encode_candidate(c) for c in candidates],
+        }
+
+    def _encode_candidate(self, cand) -> Dict[str, Any]:
+        return {
+            "digit": int(cand.digit),
+            "confidence": _as_float(cand.confidence),
+            "frame_x": _maybe_int(getattr(cand, "frame_x", None)),
+            "frame_y": _maybe_int(getattr(cand, "frame_y", None)),
+            "crop_x": _maybe_int(getattr(cand, "crop_x", None)),
+            "vote_count": int(getattr(cand, "vote_count", 0) or 0),
+            "frame_count": int(getattr(cand, "frame_count", 0) or 0),
+            "consistency": _as_float(getattr(cand, "consistency", 0.0)),
+            "selected": bool(getattr(cand, "selected", False)),
         }
 
     def _derive_agg_status(self, aggregations) -> Optional[str]:
@@ -199,3 +235,9 @@ def _as_float(value) -> float:
     if value is None:
         return 0.0
     return float(value)
+
+
+def _maybe_int(value) -> Optional[int]:
+    if value is None:
+        return None
+    return int(value)

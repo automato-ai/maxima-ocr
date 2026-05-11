@@ -39,10 +39,23 @@ def _ocr(text="123", conf=0.85, digits=None):
     return SimpleNamespace(text=text, confidence=conf, digit_detections=digits)
 
 
-def _agg(text="12", conf=0.7, status="accumulating", frames=5, reason=None):
+def _agg(text="12", conf=0.7, status="accumulating", frames=5, reason=None,
+         candidates=None, expected_digits=0):
     return SimpleNamespace(
         text=text, confidence=conf, status=status,
         frames_processed=frames, reason=reason,
+        candidates=candidates if candidates is not None else [],
+        expected_digits=expected_digits,
+    )
+
+
+def _candidate(digit=5, conf=0.8, frame_x=120, frame_y=80, crop_x=50,
+               vote_count=3, frame_count=4, consistency=0.75, selected=True):
+    return SimpleNamespace(
+        digit=digit, confidence=conf,
+        frame_x=frame_x, frame_y=frame_y, crop_x=crop_x,
+        vote_count=vote_count, frame_count=frame_count,
+        consistency=consistency, selected=selected,
     )
 
 
@@ -298,15 +311,15 @@ class TestPerFrameMetadata:
             {"digit": 8, "x1": 5, "y1": 6, "x2": 7, "y2": 8, "confidence": 0.91},
         ]
 
-    def test_ocr_does_not_leak_image_arrays(self, tmp_path, fake_writer):
-        # OCRResult carries crop_image and preprocessed_crop_image (numpy arrays).
-        # Those must NOT end up in the JSON — they'd blow up the file size and
-        # are not JSON-serializable anyway.
+    def test_ocr_image_arrays_are_persisted_as_pngs_and_referenced(self, tmp_path, fake_writer):
+        # OCRResult carries crop_image (original BGR crop, de-rotated) and
+        # preprocessed_crop_image (uint8). The recorder persists them as PNGs
+        # in a sidecar folder and references the relative paths in JSON.
         ocr_with_images = SimpleNamespace(
             text="1", confidence=0.9,
             digit_detections=[],
-            crop_image=np.zeros((10, 10, 3), dtype=np.uint8),
-            preprocessed_crop_image=np.zeros((10, 10), dtype=np.uint8),
+            crop_image=np.full((10, 12, 3), 200, dtype=np.uint8),
+            preprocessed_crop_image=np.full((20, 30), 128, dtype=np.uint8),
         )
         rec = replay_recorder.ReplayRecorder(
             folder=str(tmp_path), cam_indices=[0], readiness_enabled=True,
@@ -317,9 +330,75 @@ class TestPerFrameMetadata:
         )
         rec.finalize(_outcome())
 
-        ocr_meta = _read_meta(tmp_path)["frames"][0]["cameras"][0]["ocr"]
+        meta = _read_meta(tmp_path)
+        ocr_meta = meta["frames"][0]["cameras"][0]["ocr"]
+        prefix = meta["session"]
+        # Image arrays must not leak as JSON values.
         assert "crop_image" not in ocr_meta
         assert "preprocessed_crop_image" not in ocr_meta
+        # But PNG sidecars are produced and referenced.
+        assert ocr_meta["crop"] == f"{prefix}-crops/0000-0-orig.png"
+        assert ocr_meta["preproc"] == f"{prefix}-crops/0000-0-prep.png"
+        assert (tmp_path / ocr_meta["crop"]).is_file()
+        assert (tmp_path / ocr_meta["preproc"]).is_file()
+
+    def test_crop_files_omitted_when_pipeline_produced_no_crop(self, tmp_path, fake_writer):
+        # Bbox missed → no crop on the OCRResult; meta should not lie about it.
+        ocr_no_image = SimpleNamespace(
+            text=None, confidence=0.0, digit_detections=[],
+            crop_image=None, preprocessed_crop_image=None,
+        )
+        rec = replay_recorder.ReplayRecorder(
+            folder=str(tmp_path), cam_indices=[0], readiness_enabled=True,
+        )
+        rec.record_tick(
+            [_frame()],
+            _result(readiness=[_readiness()], bboxes=[_bbox()], ocr=[ocr_no_image]),
+        )
+        rec.finalize(_outcome())
+
+        ocr_meta = _read_meta(tmp_path)["frames"][0]["cameras"][0]["ocr"]
+        assert ocr_meta.get("crop") is None
+        assert ocr_meta.get("preproc") is None
+
+    def test_crop_file_naming_uses_frame_index_and_cam_id(self, tmp_path, fake_writer):
+        ocr_a = SimpleNamespace(
+            text="a", confidence=0.5, digit_detections=[],
+            crop_image=np.zeros((4, 4, 3), dtype=np.uint8),
+            preprocessed_crop_image=np.zeros((4, 4), dtype=np.uint8),
+        )
+        ocr_b = SimpleNamespace(
+            text="b", confidence=0.5, digit_detections=[],
+            crop_image=np.zeros((4, 4, 3), dtype=np.uint8),
+            preprocessed_crop_image=np.zeros((4, 4), dtype=np.uint8),
+        )
+        rec = replay_recorder.ReplayRecorder(
+            folder=str(tmp_path), cam_indices=[0, 3], readiness_enabled=True,
+        )
+        rec.record_tick(
+            [_frame(), _frame()],
+            _result(
+                readiness=[_readiness(), _readiness()],
+                bboxes=[_bbox(), _bbox()],
+                ocr=[ocr_a, ocr_b],
+            ),
+        )
+        rec.record_tick(
+            [_frame(), _frame()],
+            _result(
+                readiness=[_readiness(), _readiness()],
+                bboxes=[_bbox(), _bbox()],
+                ocr=[ocr_a, ocr_b],
+            ),
+        )
+        rec.finalize(_outcome())
+
+        meta = _read_meta(tmp_path)
+        # Filename: {frame_idx:04d}-{cam_id}-{orig|prep}.png
+        assert meta["frames"][0]["cameras"][0]["ocr"]["crop"].endswith("/0000-0-orig.png")
+        assert meta["frames"][0]["cameras"][1]["ocr"]["crop"].endswith("/0000-3-orig.png")
+        assert meta["frames"][1]["cameras"][0]["ocr"]["crop"].endswith("/0001-0-orig.png")
+        assert meta["frames"][1]["cameras"][1]["ocr"]["crop"].endswith("/0001-3-orig.png")
 
     def test_aggregation_serialized_per_camera(self, tmp_path, fake_writer):
         rec = replay_recorder.ReplayRecorder(
@@ -331,7 +410,8 @@ class TestPerFrameMetadata:
                 readiness=[_readiness()],
                 bboxes=[_bbox()],
                 ocr=[_ocr()],
-                aggregation=[_agg(text="12", conf=0.6, status="accumulating", frames=3, reason="x")],
+                aggregation=[_agg(text="12", conf=0.6, status="accumulating",
+                                  frames=3, reason="x", expected_digits=8)],
             ),
         )
         rec.finalize(_outcome())
@@ -340,7 +420,63 @@ class TestPerFrameMetadata:
         assert cam["aggregation"] == {
             "text": "12", "confidence": 0.6, "status": "accumulating",
             "frames_processed": 3, "reason": "x",
+            "expected_digits": 8,
+            "candidates": [],
         }
+
+    def test_aggregation_candidates_serialized(self, tmp_path, fake_writer):
+        # The replay tool draws candidates inside the original crop, so we need
+        # crop_x and the selected flag to round-trip per-candidate.
+        rec = replay_recorder.ReplayRecorder(
+            folder=str(tmp_path), cam_indices=[0], readiness_enabled=True,
+        )
+        cands = [
+            _candidate(digit=1, conf=0.9, frame_x=100, frame_y=80,
+                       crop_x=25, vote_count=4, frame_count=4,
+                       consistency=1.0, selected=True),
+            _candidate(digit=2, conf=0.7, frame_x=130, frame_y=82,
+                       crop_x=55, vote_count=2, frame_count=4,
+                       consistency=0.5, selected=False),
+        ]
+        rec.record_tick(
+            [_frame()],
+            _result(
+                readiness=[_readiness()], bboxes=[_bbox()], ocr=[_ocr()],
+                aggregation=[_agg(candidates=cands, expected_digits=2)],
+            ),
+        )
+        rec.finalize(_outcome())
+
+        cam = _read_meta(tmp_path)["frames"][0]["cameras"][0]
+        assert cam["aggregation"]["candidates"] == [
+            {"digit": 1, "confidence": 0.9, "frame_x": 100, "frame_y": 80,
+             "crop_x": 25, "vote_count": 4, "frame_count": 4,
+             "consistency": 1.0, "selected": True},
+            {"digit": 2, "confidence": 0.7, "frame_x": 130, "frame_y": 82,
+             "crop_x": 55, "vote_count": 2, "frame_count": 4,
+             "consistency": 0.5, "selected": False},
+        ]
+
+    def test_aggregation_candidate_crop_x_may_be_null(self, tmp_path, fake_writer):
+        # Some aggregator paths leave crop_x unset (None) on candidates that
+        # the geometry transform couldn't place. JSON must accept that.
+        rec = replay_recorder.ReplayRecorder(
+            folder=str(tmp_path), cam_indices=[0], readiness_enabled=True,
+        )
+        cand = _candidate(crop_x=None, frame_x=None, frame_y=None)
+        rec.record_tick(
+            [_frame()],
+            _result(
+                readiness=[_readiness()], bboxes=[_bbox()], ocr=[_ocr()],
+                aggregation=[_agg(candidates=[cand])],
+            ),
+        )
+        rec.finalize(_outcome())
+
+        meta_cand = _read_meta(tmp_path)["frames"][0]["cameras"][0]["aggregation"]["candidates"][0]
+        assert meta_cand["crop_x"] is None
+        assert meta_cand["frame_x"] is None
+        assert meta_cand["frame_y"] is None
 
     def test_fused_result_and_agg_status_at_tick_level(self, tmp_path, fake_writer):
         rec = replay_recorder.ReplayRecorder(
@@ -365,6 +501,7 @@ class TestPerFrameMetadata:
         assert tick["fused"] == {
             "text": "123", "confidence": 0.95, "status": "recognized",
             "frames_processed": 10, "reason": None,
+            "expected_digits": 0, "candidates": [],
         }
         # agg_status: any cam in a terminal state wins — matches
         # InferencePipeline.aggregation_status semantics.

@@ -55,6 +55,7 @@ Source: "..\models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubd
 
 ; Compiled tools.
 Source: "..\dist\tools\modbus_client.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\dist\tools\replay.exe";        DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Run]
 ; Register and start the service after files are in place.

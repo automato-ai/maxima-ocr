@@ -56,6 +56,13 @@ def test_modbus_client_exe_built():
     assert exe.stat().st_size > 500_000, f"{exe} suspiciously small"
 
 
+def test_replay_exe_built():
+    exe = DIST / "tools" / "replay.exe"
+    assert exe.is_file(), "tools/replay.exe must be compiled into dist/tools/"
+    # cv2 + numpy pull in plenty of weight; expect well over a few MB.
+    assert exe.stat().st_size > 1_000_000, f"{exe} suspiciously small"
+
+
 def test_installer_exe_built():
     """build.ps1 must produce exactly one MaximaOCR-Setup-<version>.exe."""
     candidates = list(DIST.glob(INSTALLER_GLOB))

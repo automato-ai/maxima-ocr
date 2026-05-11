@@ -192,6 +192,15 @@ function Invoke-PyInstaller {
         (Join-Path $RepoRoot 'tools\modbus_client.py')
     )
 
+    Write-Step "Building dist\tools\replay.exe"
+    Invoke-Native -Exe $pyi -Arguments @(
+        '--noconfirm', '--onefile',
+        '--distpath', $toolsOut,
+        '--workpath', (Join-Path $RepoRoot 'build\replay'),
+        '--specpath', (Join-Path $RepoRoot 'build\replay'),
+        (Join-Path $RepoRoot 'tools\replay.py')
+    )
+
     Write-Step "Staging config.yaml next to modbus_server.exe"
     Copy-Item -LiteralPath (Join-Path $RepoRoot 'config.yaml') `
               -Destination (Join-Path $DistDir 'config.yaml') -Force
