@@ -6,6 +6,7 @@ when a value is written to it.
 """
 import asyncio
 import logging.config
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import config
@@ -19,13 +20,14 @@ from pymodbus.datastore import (
 )
 from pymodbus.server import StartAsyncTcpServer
 
-from ocr import usb_cams
+from ocr import recognize, usb_cams
 
 
 OP_ADDRESS  = 1
 OP_READY    = 0
 OP_CAMERA   = 1
-VALID_OPS = [OP_READY,OP_CAMERA]
+OP_OCR      = 2
+VALID_OPS = [OP_READY, OP_CAMERA, OP_OCR]
 
 STATUS_ADDRESS  = 2
 
@@ -100,10 +102,30 @@ def handle_background_task(opcode: int, store):
             store.setValues(RESULT_ADDRESS, ints_list)
             store.setValues(STATUS_ADDRESS, [STATUS_COMPLETE]) # Complete status
         except Exception as e:
+            logger.exception("Cameras capture failed: %s", e)
+            store.setValues(STATUS_ADDRESS, [STATUS_ERROR])
+    elif opcode == OP_OCR:
+        store.setValues(STATUS_ADDRESS, [STATUS_WORKING])
+        try:
+            text = recognize.recognize_cylinder(config.read_config()) or ""
+            ints_list = list(text.encode("ascii"))
+            ints_list.append(0) # terminate the string
+            store.setValues(RESULT_ADDRESS, ints_list)
+            store.setValues(STATUS_ADDRESS, [STATUS_COMPLETE])
+        except Exception as e:
+            logger.exception("OCR recognition failed: %s", e)
             store.setValues(STATUS_ADDRESS, [STATUS_ERROR])
 
 async def run_callback_server(config):
     """Define datastore callback for server and do setup."""
+
+    try:
+        recognize.load_pipeline(config)
+    except Exception as e:
+        logger.critical(
+            "OCR pipeline failed to load at startup; aborting. Reason: %s", e
+        )
+        sys.exit(1)
 
     block = CallbackDataBlock(0x01, [0] * 1000)
 

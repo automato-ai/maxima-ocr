@@ -5,10 +5,16 @@ PyInstaller
 fastapi[standard]
 
 # modbus
-pymodbus
+# 3.13 dropped setValues/getValues from ModbusSequentialDataBlock; modbus_server.py relies on the legacy API.
+pymodbus<3.13
 
 # cam capture
 # opencv-python~=4.12.0.88
 # opencv-python
 opencv-contrib-python
 cv2-enumerate-cameras
+
+# OCR pipeline (install with --extra-index-url https://download.pytorch.org/whl/cpu for CPU-only torch)
+maxima-inference @ https://github.com/dennispo/maxima-ocr-learning/releases/download/wheel-v0.1.0/maxima_inference-0.1.0-py3-none-any.whl
+torch>=2.0.0
+torchvision>=0.15.0
