@@ -24,6 +24,14 @@ ocr:
   # Maximum number of frames per OCR trigger before falling back to "undetected".
   max_frames: 400
 
+  # Recording for replay/debugging. Each OCR trigger writes one MP4 per camera
+  # (same naming convention as the capture opcode: {YYYYMMDD-HHMMSS}-{cam}.mp4)
+  # plus a {YYYYMMDD-HHMMSS}-meta.json sidecar with per-frame readiness/bbox/OCR/
+  # aggregation decisions and the final outcome. Artifacts land in capture.folder.
+  # Set enabled: false to skip recording on disk-constrained sites.
+  capture:
+    enabled: true
+
   # Optional override for the pipeline's min_ready_cams gate. Omit to use the bundle default.
   # min_ready_cams: 3
 

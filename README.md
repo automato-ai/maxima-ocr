@@ -117,6 +117,29 @@ and the result string:
 | Cameras not ready | `10` (Error)    | `cameras not ready`   |
 | Unrecognized      | `10` (Error)    | `unrecognized`        |
 
+#### OCR session recording
+Every OCR trigger (opcode `2`) leaves a replay artifact in `capture.folder`
+(default `./capture`):
+
+| File                                  | Contents                              |
+|---------------------------------------|---------------------------------------|
+| `{YYYYMMDD-HHMMSS}-{cam}.mp4`         | one video per camera, same naming as opcode `1` |
+| `{YYYYMMDD-HHMMSS}-meta.json`         | session header + per-frame model decisions + outcome |
+
+The metadata JSON pairs 1:1 with the videos via the shared timestamp prefix.
+Each frame entry carries, per camera, the readiness decision (or `{"disabled":
+true}` when readiness gating is off), the bounding box, the OCR text +
+per-digit detections, and the aggregator's running result. The tick-level
+`agg_status` and `fused` fields capture the cross-camera fusion verdict — the
+same data the pipeline uses to decide whether to terminate.
+
+Recording is enabled by default. To disable on disk-constrained sites:
+```yaml
+ocr:
+  capture:
+    enabled: false
+```
+
 #### Status codes for monitoring
 Optionally, the master can monitor the execution of the operation by reading the execution status from 
 holding register at address `2` during the operation. The possible values are:

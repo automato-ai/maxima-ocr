@@ -11,12 +11,14 @@ import cv2
 import numpy as np
 from maxima_inference import InferencePipeline, validate_bundle
 
+from ocr.replay_recorder import ReplayRecorder
 from ocr.usb_cams import get_cams, get_cap_format
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_FRAMES = 400
 DEFAULT_MODELS_ROOT = "./models"
+DEFAULT_CAPTURE_FOLDER = "./capture"
 
 ERR_CAMERAS_NOT_FOUND = "cameras not found"
 ERR_CAMERAS_NOT_READY = "cameras not ready"
@@ -203,37 +205,79 @@ def recognize_cylinder(config) -> RecognitionResult:
         _log_summary(outcome, frames=0, start=start)
         return outcome
 
+    recorder = _make_recorder(config, cam_indices, pipeline.readiness_enabled)
+
     logger.info("OCR phase: streaming frames into pipeline")
     frames_seen = 0
     outcome: Optional[RecognitionResult] = None
-    for _, frames in zip(
-        range(max_frames),
-        _iter_frames(cap_format, cam_indices, width=width, height=height),
-    ):
-        frames_seen += 1
-        if frames_seen == 1:
-            logger.info(
-                "OCR first frame: shapes=%s dtypes=%s",
-                [getattr(f, "shape", None) for f in frames],
-                [str(getattr(f, "dtype", type(f).__name__)) for f in frames],
-            )
-        result = pipeline.process_frames(frames)
-        if result.fused_result is not None and result.fused_result.text:
-            outcome = RecognitionResult(ok=True, text=result.fused_result.text)
-            break
-        if pipeline.aggregation_status == "undetected":
-            outcome = _undetected_outcome(result)
-            break
-    if outcome is None:
-        if frames_seen < max_frames:
-            logger.warning(
-                "OCR frame stream ended early at %d/%d frames (camera read failed?)",
-                frames_seen, max_frames,
-            )
-        outcome = RecognitionResult(ok=False, text=ERR_UNRECOGNIZED)
+    try:
+        for _, frames in zip(
+            range(max_frames),
+            _iter_frames(cap_format, cam_indices, width=width, height=height),
+        ):
+            frames_seen += 1
+            if frames_seen == 1:
+                logger.info(
+                    "OCR first frame: shapes=%s dtypes=%s",
+                    [getattr(f, "shape", None) for f in frames],
+                    [str(getattr(f, "dtype", type(f).__name__)) for f in frames],
+                )
+            result = pipeline.process_frames(frames)
+            _safe_record_tick(recorder, frames, result)
+            if result.fused_result is not None and result.fused_result.text:
+                outcome = RecognitionResult(ok=True, text=result.fused_result.text)
+                break
+            if pipeline.aggregation_status == "undetected":
+                outcome = _undetected_outcome(result)
+                break
+        if outcome is None:
+            if frames_seen < max_frames:
+                logger.warning(
+                    "OCR frame stream ended early at %d/%d frames (camera read failed?)",
+                    frames_seen, max_frames,
+                )
+            outcome = RecognitionResult(ok=False, text=ERR_UNRECOGNIZED)
+    finally:
+        _safe_finalize(recorder, outcome)
 
     _log_summary(outcome, frames=frames_seen, start=start)
     return outcome
+
+
+def _make_recorder(config, cam_indices, readiness_enabled) -> Optional[ReplayRecorder]:
+    """Build a ReplayRecorder unless `ocr.capture.enabled` is False. Recording is
+    on by default — every OCR trigger leaves an artifact for replay/debugging."""
+    capture_cfg = (config.get("ocr") or {}).get("capture") or {}
+    if not capture_cfg.get("enabled", True):
+        return None
+    folder = (config.get("capture") or {}).get("folder", DEFAULT_CAPTURE_FOLDER)
+    try:
+        return ReplayRecorder(
+            folder=folder,
+            cam_indices=cam_indices,
+            readiness_enabled=readiness_enabled,
+        )
+    except Exception:
+        logger.exception("Replay recorder init failed; continuing without recording")
+        return None
+
+
+def _safe_record_tick(recorder, frames, result) -> None:
+    if recorder is None:
+        return
+    try:
+        recorder.record_tick(frames, result)
+    except Exception:
+        logger.exception("Replay recorder tick failed; OCR continues")
+
+
+def _safe_finalize(recorder, outcome) -> None:
+    if recorder is None:
+        return
+    try:
+        recorder.finalize(outcome)
+    except Exception:
+        logger.exception("Replay recorder finalize failed")
 
 
 def _log_summary(outcome: RecognitionResult, frames: int, start: float) -> None:

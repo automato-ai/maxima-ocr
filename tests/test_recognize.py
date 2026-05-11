@@ -167,6 +167,154 @@ class TestRecognizeCylinder:
         assert iter_mock.call_args.kwargs.get("height") is None
 
 
+# ----- ReplayRecorder integration -----
+
+class TestReplayRecorderIntegration:
+    def _pipe(self):
+        pipe = _pipeline_returning(text="OK", terminal="recognized")
+        pipe.readiness_enabled = True
+        return pipe
+
+    def test_recorder_created_with_cam_indices_and_readiness_flag(self, monkeypatch):
+        monkeypatch.setattr(recognize, "_open_camera_indices", lambda _cfg: (0, [0, 2]))
+        pipe = self._pipe()
+        pipe.readiness_enabled = False
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames",
+                          return_value=iter([[1, 2]])), \
+             patch.object(recognize, "ReplayRecorder") as ctor:
+            ctor.return_value = MagicMock()
+            recognize.recognize_cylinder({"capture": {"folder": "/tmp/cap"}})
+
+        ctor.assert_called_once()
+        kwargs = ctor.call_args.kwargs
+        assert kwargs["cam_indices"] == [0, 2]
+        assert kwargs["readiness_enabled"] is False
+        assert kwargs["folder"] == "/tmp/cap"
+
+    def test_recorder_defaults_to_capture_folder_when_unset(self, cams_available):
+        pipe = self._pipe()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames",
+                          return_value=iter([[1]])), \
+             patch.object(recognize, "ReplayRecorder") as ctor:
+            ctor.return_value = MagicMock()
+            recognize.recognize_cylinder({})
+
+        assert ctor.call_args.kwargs["folder"] == "./capture"
+
+    def test_recorder_enabled_by_default(self, cams_available):
+        pipe = self._pipe()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames",
+                          return_value=iter([[1]])), \
+             patch.object(recognize, "ReplayRecorder") as ctor:
+            ctor.return_value = MagicMock()
+            recognize.recognize_cylinder({})
+
+        ctor.assert_called_once()
+
+    def test_recorder_skipped_when_capture_disabled(self, cams_available):
+        pipe = self._pipe()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames",
+                          return_value=iter([[1]])), \
+             patch.object(recognize, "ReplayRecorder") as ctor:
+            recognize.recognize_cylinder({"ocr": {"capture": {"enabled": False}}})
+
+        ctor.assert_not_called()
+
+    def test_recorder_not_created_when_no_cameras(self, monkeypatch):
+        monkeypatch.setattr(recognize, "_open_camera_indices", lambda _cfg: (0, []))
+        pipe = self._pipe()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "ReplayRecorder") as ctor:
+            result = recognize.recognize_cylinder({})
+
+        assert result.ok is False
+        assert result.text == recognize.ERR_CAMERAS_NOT_FOUND
+        ctor.assert_not_called()
+
+    def test_each_tick_records_frames_and_result(self, cams_available):
+        pipe = MagicMock()
+        pipe.readiness_enabled = True
+        pipe.aggregation_status = None
+        tick_results = [
+            SimpleNamespace(fused_result=None, aggregation=None),
+            SimpleNamespace(fused_result=SimpleNamespace(text="42"), aggregation=None),
+        ]
+        pipe.process_frames.side_effect = tick_results
+        recorder = MagicMock()
+        ticks = [["frame0"], ["frame1"]]
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames", return_value=iter(ticks)), \
+             patch.object(recognize, "ReplayRecorder", return_value=recorder):
+            recognize.recognize_cylinder({})
+
+        assert recorder.record_tick.call_count == 2
+        # Each record_tick gets (frames_for_this_tick, inference_result_for_this_tick).
+        for i, call in enumerate(recorder.record_tick.call_args_list):
+            assert call.args[0] is ticks[i]
+            assert call.args[1] is tick_results[i]
+
+    def test_finalize_called_with_success_outcome(self, cams_available):
+        pipe = self._pipe()
+        recorder = MagicMock()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames", return_value=iter([[1]])), \
+             patch.object(recognize, "ReplayRecorder", return_value=recorder):
+            result = recognize.recognize_cylinder({})
+
+        recorder.finalize.assert_called_once()
+        outcome = recorder.finalize.call_args.args[0]
+        assert outcome.ok is True
+        assert outcome.text == "OK"
+        assert outcome is result  # same object — single source of truth
+
+    def test_finalize_called_with_failure_outcome(self, cams_available):
+        pipe = _pipeline_returning(text=None, terminal="undetected")
+        pipe.readiness_enabled = True
+        recorder = MagicMock()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames", return_value=iter([[1]])), \
+             patch.object(recognize, "ReplayRecorder", return_value=recorder):
+            recognize.recognize_cylinder({})
+
+        outcome = recorder.finalize.call_args.args[0]
+        assert outcome.ok is False
+        assert outcome.text == recognize.ERR_UNRECOGNIZED
+
+    def test_finalize_called_even_if_iter_frames_raises(self, cams_available):
+        pipe = self._pipe()
+
+        def boom(*_a, **_k):
+            raise RuntimeError("camera died")
+
+        recorder = MagicMock()
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames", side_effect=boom), \
+             patch.object(recognize, "ReplayRecorder", return_value=recorder):
+            with pytest.raises(RuntimeError):
+                recognize.recognize_cylinder({})
+
+        recorder.finalize.assert_called_once()
+
+    def test_recorder_failure_does_not_block_recognition_result(self, cams_available):
+        # If the recorder itself blows up, the OCR result must still be returned —
+        # recording is a debug aid, not a critical path.
+        pipe = self._pipe()
+        bad_recorder = MagicMock()
+        bad_recorder.record_tick.side_effect = RuntimeError("disk full")
+        bad_recorder.finalize.side_effect = RuntimeError("disk full")
+        with patch.object(recognize, "get_pipeline", return_value=pipe), \
+             patch.object(recognize, "_iter_frames", return_value=iter([[1]])), \
+             patch.object(recognize, "ReplayRecorder", return_value=bad_recorder):
+            result = recognize.recognize_cylinder({})
+
+        assert result.ok is True
+        assert result.text == "OK"
+
+
 # ----- load_pipeline -----
 
 class TestLoadPipeline:
