@@ -23,6 +23,7 @@ from modbus_server import (
     STATUS_COMPLETE,
     STATUS_WORKING,
 )
+from ocr.recognize import RecognitionResult
 
 # Wire addresses (one less than the corresponding server-side constants).
 WIRE_OP_REGISTER     = modbus_server.OP_ADDRESS - 1      # 0
@@ -55,7 +56,9 @@ def running_server(monkeypatch):
     """
     monkeypatch.setattr(modbus_server.recognize, "load_pipeline", lambda cfg: None)
     monkeypatch.setattr(
-        modbus_server.recognize, "recognize_cylinder", lambda cfg: "WIRE-OK"
+        modbus_server.recognize,
+        "recognize_cylinder",
+        lambda cfg: RecognitionResult(ok=True, text="WIRE-OK"),
     )
     monkeypatch.setattr(modbus_server.config, "read_config", lambda: {})
 
@@ -122,7 +125,7 @@ class TestOcrTriggerOverTcp:
         monkeypatch.setattr(
             modbus_server.recognize,
             "recognize_cylinder",
-            lambda cfg: (calls.append(1), "X")[1],
+            lambda cfg: (calls.append(1), RecognitionResult(ok=True, text="X"))[1],
         )
 
         with ModbusTcpClient(host, port=port, timeout=5) as client:

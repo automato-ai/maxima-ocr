@@ -8,6 +8,14 @@ camera:
   # valid values: "ANY", "DSHOW", "QT", "MSMF", "OPENNI", "FFMPEG", "OPENCV_MJPEG", "V4L", "V4L2", "INTEL_MFX", "AVFOUNDATION"
   format: DSHOW
 
+  # Optional capture resolution override. Omit to use the camera's default — the
+  # default is logged on every trigger so you can see what the cam reports.
+  # Some cams + DSHOW combinations break when set to an unsupported mode (the
+  # cap silently transitions to 0x0 and reads fail); try MSMF as the backend if
+  # DSHOW won't accept higher resolutions for your cam.
+  width: 1920
+  height: 1080
+
 models:
   # Bundle root. Active bundle is `<root>/<active.txt contents>/manifest.yaml`.
   root: ./models
@@ -15,8 +23,30 @@ models:
 ocr:
   # Maximum number of frames per OCR trigger before falling back to "undetected".
   max_frames: 400
+
   # Optional override for the pipeline's min_ready_cams gate. Omit to use the bundle default.
   # min_ready_cams: 3
+
+  # Disable the readiness gate entirely (every frame proceeds to bbox + OCR).
+  # Default: true. Set to false for cylinder-always-present rigs or for debugging
+  # when readiness misclassification is blocking recognition.
+  # readiness_enabled: False
+
+  # Confidence thresholds, applied on top of the bundle defaults after the models
+  # load. Lower a threshold if the corresponding stage is producing too few
+  # detections; raise it to suppress false positives. Unknown keys are ignored
+  # with a WARNING in the log.
+  # thresholds:
+  #   # Minimum readiness softmax confidence to count a camera as "ready".
+  #   # Only relevant when readiness_enabled is true.
+  #   readiness_confidence: 0.75
+  #   # Minimum YOLO confidence for the cylinder-ID bounding box.
+  #   # Lower (e.g. 0.5) if the bbox model misses the ID region; raise to suppress
+  #   # spurious boxes.
+  #   bbox_confidence: 0.75
+  #   # Minimum digit-string confidence emitted by the OCR recognizer.
+  #   # Lower if individual digit detections are being discarded as low-confidence.
+  #   ocr_confidence: 0.75
 
 logging:
   version: 1
@@ -30,7 +60,7 @@ logging:
   handlers:
     consoleHandler:
       class: logging.StreamHandler
-      level: DEBUG
+      level: INFO
       formatter: simpleFormatter
       stream: ext://sys.stderr
     fileHandler:

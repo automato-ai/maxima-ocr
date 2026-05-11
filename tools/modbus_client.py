@@ -130,12 +130,15 @@ def cmd_trigger(args, op_code, op_name):
             write_op(client, OP_READY)
 
         name = STATUS_NAMES.get(status, f"UNKNOWN({status})")
+        text = read_result(client)
         if status == STATUS_COMPLETE:
-            text = read_result(client)
             print(f"status: {name}")
             print(f"result: {text!r}")
             return 0
+        # On ERROR the server writes a human-readable description (e.g.
+        # "cameras not ready", "unrecognized") to the result registers.
         print(f"status: {name}", file=sys.stderr)
+        print(f"result: {text!r}", file=sys.stderr)
         return 1
 
 
