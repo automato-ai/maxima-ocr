@@ -211,3 +211,10 @@ capture
 
 # OCR models bundle
 models
+
+# Runtime rotated logs (modbus_server.log.1, service-stdout.log.2, etc.).
+# Plain *.log is already ignored above; this picks up the rotation suffix.
+*.log.*
+
+# Local Claude Code session state.
+.claude/
