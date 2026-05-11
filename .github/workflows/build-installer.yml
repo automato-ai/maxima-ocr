@@ -34,25 +34,30 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Authorize pip for the private wheel asset
-        shell: pwsh
-        env:
-          MODELS_REPO_TOKEN: ${{ secrets.MODELS_REPO_TOKEN }}
-        run: |
-          $netrc = @"
-          machine github.com
-          login x-access-token
-          password $env:MODELS_REPO_TOKEN
-          "@
-          $netrc | Set-Content -LiteralPath "$env:USERPROFILE\_netrc" -Encoding ASCII -NoNewline
-          Copy-Item "$env:USERPROFILE\_netrc" "$env:USERPROFILE\.netrc" -Force
-
       - name: Create venv and install requirements
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.MODELS_REPO_TOKEN }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
           python -m venv venv
           .\venv\Scripts\python.exe -m pip install --upgrade pip
-          .\venv\Scripts\pip.exe install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+          # maxima-inference lives on the private dennispo/maxima-ocr-learning repo.
+          # Pre-fetch the wheel via gh (which authenticates with GH_TOKEN) so pip
+          # never has to authenticate to github.com itself.
+          New-Item -ItemType Directory -Path build\wheels -Force | Out-Null
+          gh release download wheel-v0.1.0 --repo dennispo/maxima-ocr-learning --pattern '*.whl' --dir build\wheels --clobber
+          $wheel = (Get-ChildItem -LiteralPath build\wheels -Filter '*.whl' | Select-Object -First 1).FullName
+          if (-not $wheel) { throw 'No .whl asset found under wheel-v0.1.0 release.' }
+          .\venv\Scripts\pip.exe install $wheel
+
+          # Install the rest of requirements.txt with the maxima-inference line filtered out
+          # (the original URL is private; the wheel is already installed above).
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^\s*maxima-inference\s*@' } | Set-Content requirements-ci.txt
+          .\venv\Scripts\pip.exe install -r requirements-ci.txt --extra-index-url https://download.pytorch.org/whl/cpu
           .\venv\Scripts\pip.exe install pytest
 
       - name: Build installer
