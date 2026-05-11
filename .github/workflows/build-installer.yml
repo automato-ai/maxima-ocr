@@ -1,0 +1,80 @@
+name: Build Windows installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version baked into the installer (e.g. 0.4 or 0.4.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version: $v"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Authorize pip for the private wheel asset
+        shell: pwsh
+        env:
+          MODELS_REPO_TOKEN: ${{ secrets.MODELS_REPO_TOKEN }}
+        run: |
+          $netrc = @"
+          machine github.com
+          login x-access-token
+          password $env:MODELS_REPO_TOKEN
+          "@
+          $netrc | Set-Content -LiteralPath "$env:USERPROFILE\_netrc" -Encoding ASCII -NoNewline
+          Copy-Item "$env:USERPROFILE\_netrc" "$env:USERPROFILE\.netrc" -Force
+
+      - name: Create venv and install requirements
+        shell: pwsh
+        run: |
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --upgrade pip
+          .\venv\Scripts\pip.exe install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          .\venv\Scripts\pip.exe install pytest
+
+      - name: Build installer
+        shell: cmd
+        env:
+          GH_TOKEN: ${{ secrets.MODELS_REPO_TOKEN }}
+        run: compile.bat ${{ steps.ver.outputs.version }}
+
+      - name: Run post-build artifact tests
+        shell: pwsh
+        run: .\venv\Scripts\pytest.exe tests\test_build_artifacts.py -v
+
+      - name: Upload installer as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaximaOCR-Setup-${{ steps.ver.outputs.version }}
+          path: dist/MaximaOCR-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MaximaOCR-Setup-*.exe
+          fail_on_unmatched_files: true
