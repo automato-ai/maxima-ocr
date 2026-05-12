@@ -107,11 +107,14 @@ def handle_background_task(opcode: int, store):
     elif opcode == OP_OCR:
         store.setValues(STATUS_ADDRESS, [STATUS_WORKING])
         try:
-            text = recognize.recognize_cylinder(config.read_config()) or ""
-            ints_list = list(text.encode("ascii"))
+            result = recognize.recognize_cylinder(config.read_config())
+            ints_list = list(result.text.encode("ascii"))
             ints_list.append(0) # terminate the string
             store.setValues(RESULT_ADDRESS, ints_list)
-            store.setValues(STATUS_ADDRESS, [STATUS_COMPLETE])
+            store.setValues(
+                STATUS_ADDRESS,
+                [STATUS_COMPLETE if result.ok else STATUS_ERROR],
+            )
         except Exception as e:
             logger.exception("OCR recognition failed: %s", e)
             store.setValues(STATUS_ADDRESS, [STATUS_ERROR])

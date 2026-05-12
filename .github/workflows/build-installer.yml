@@ -1,0 +1,85 @@
+name: Build Windows installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version baked into the installer (e.g. 0.4 or 0.4.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building version: $v"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Create venv and install requirements
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.MODELS_REPO_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --upgrade pip
+
+          # maxima-inference lives on the private dennispo/maxima-ocr-learning repo.
+          # Pre-fetch the wheel via gh (which authenticates with GH_TOKEN) so pip
+          # never has to authenticate to github.com itself.
+          New-Item -ItemType Directory -Path build\wheels -Force | Out-Null
+          gh release download wheel-v0.1.0 --repo dennispo/maxima-ocr-learning --pattern '*.whl' --dir build\wheels --clobber
+          $wheel = (Get-ChildItem -LiteralPath build\wheels -Filter '*.whl' | Select-Object -First 1).FullName
+          if (-not $wheel) { throw 'No .whl asset found under wheel-v0.1.0 release.' }
+          .\venv\Scripts\pip.exe install $wheel
+
+          # Install the rest of requirements.txt with the maxima-inference line filtered out
+          # (the original URL is private; the wheel is already installed above).
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^\s*maxima-inference\s*@' } | Set-Content requirements-ci.txt
+          .\venv\Scripts\pip.exe install -r requirements-ci.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          .\venv\Scripts\pip.exe install pytest
+
+      - name: Build installer
+        shell: cmd
+        env:
+          GH_TOKEN: ${{ secrets.MODELS_REPO_TOKEN }}
+        run: compile.bat ${{ steps.ver.outputs.version }}
+
+      - name: Run post-build artifact tests
+        shell: pwsh
+        run: .\venv\Scripts\pytest.exe tests\test_build_artifacts.py -v
+
+      - name: Upload installer as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaximaOCR-Setup-${{ steps.ver.outputs.version }}
+          path: dist/MaximaOCR-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MaximaOCR-Setup-*.exe
+          fail_on_unmatched_files: true

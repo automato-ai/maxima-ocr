@@ -19,6 +19,7 @@ from modbus_server import (
     handle_background_task,
     run_callback_server,
 )
+from ocr.recognize import RecognitionResult
 
 
 @pytest.fixture
@@ -229,7 +230,7 @@ class TestOcrTriggerPath:
 class TestHandleBackgroundTaskOcr:
     def test_ocr_op_writes_recognized_text_and_complete_status(self, block):
         with patch.object(modbus_server.recognize, "recognize_cylinder",
-                          return_value="ABC123"), \
+                          return_value=RecognitionResult(ok=True, text="ABC123")), \
              patch.object(modbus_server.config, "read_config", return_value={}):
             handle_background_task(OP_OCR, block)
 
@@ -237,17 +238,29 @@ class TestHandleBackgroundTaskOcr:
         expected = [ord("A"), ord("B"), ord("C"), ord("1"), ord("2"), ord("3"), 0]
         assert block.getValues(RESULT_ADDRESS, len(expected)) == expected
 
-    def test_ocr_op_undetected_writes_zero_terminator_only(self, block):
+    def test_ocr_op_unrecognized_writes_error_description_and_error_status(self, block):
         with patch.object(modbus_server.recognize, "recognize_cylinder",
-                          return_value=None), \
+                          return_value=RecognitionResult(ok=False, text="unrecognized")), \
              patch.object(modbus_server.config, "read_config", return_value={}):
             handle_background_task(OP_OCR, block)
 
-        assert block.getValues(STATUS_ADDRESS, 1) == [STATUS_COMPLETE]
-        # Empty string + terminator -> just a 0 at RESULT_ADDRESS.
-        assert block.getValues(RESULT_ADDRESS, 1) == [0]
+        assert block.getValues(STATUS_ADDRESS, 1) == [STATUS_ERROR]
+        # The failure description is written to the result registers as ASCII bytes
+        # so the Modbus master can read it from RESULT_ADDRESS.
+        expected = list(b"unrecognized") + [0]
+        assert block.getValues(RESULT_ADDRESS, len(expected)) == expected
 
-    def test_ocr_op_failure_sets_error_status(self, block):
+    def test_ocr_op_cameras_not_found_writes_description_and_error_status(self, block):
+        with patch.object(modbus_server.recognize, "recognize_cylinder",
+                          return_value=RecognitionResult(ok=False, text="cameras not found")), \
+             patch.object(modbus_server.config, "read_config", return_value={}):
+            handle_background_task(OP_OCR, block)
+
+        assert block.getValues(STATUS_ADDRESS, 1) == [STATUS_ERROR]
+        expected = list(b"cameras not found") + [0]
+        assert block.getValues(RESULT_ADDRESS, len(expected)) == expected
+
+    def test_ocr_op_exception_sets_error_status(self, block):
         with patch.object(modbus_server.recognize, "recognize_cylinder",
                           side_effect=RuntimeError("bundle missing")), \
              patch.object(modbus_server.config, "read_config", return_value={}):
@@ -260,7 +273,7 @@ class TestHandleBackgroundTaskOcr:
 
         def record_status(_cfg):
             observed["status"] = block.getValues(STATUS_ADDRESS, 1)[0]
-            return "X"
+            return RecognitionResult(ok=True, text="X")
 
         with patch.object(modbus_server.recognize, "recognize_cylinder",
                           side_effect=record_status), \
@@ -271,7 +284,7 @@ class TestHandleBackgroundTaskOcr:
 
     def test_ocr_op_does_not_invoke_video_capture(self, block):
         with patch.object(modbus_server.recognize, "recognize_cylinder",
-                          return_value="X"), \
+                          return_value=RecognitionResult(ok=True, text="X")), \
              patch.object(modbus_server.usb_cams, "capture_all_cams") as cap, \
              patch.object(modbus_server.config, "read_config", return_value={}):
             handle_background_task(OP_OCR, block)
@@ -280,7 +293,7 @@ class TestHandleBackgroundTaskOcr:
 
     def test_ocr_op_result_is_zero_terminated(self, block):
         with patch.object(modbus_server.recognize, "recognize_cylinder",
-                          return_value="42"), \
+                          return_value=RecognitionResult(ok=True, text="42")), \
              patch.object(modbus_server.config, "read_config", return_value={}):
             handle_background_task(OP_OCR, block)
 
